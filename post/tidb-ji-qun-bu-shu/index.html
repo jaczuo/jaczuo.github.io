@@ -1,0 +1,367 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="description" content="" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TiDB集群部署 | jaczuo</title>
+<link rel="shortcut icon" href="https://jaczuo.github.io/favicon.ico?v=1556012078701">
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="stylesheet" href="https://jaczuo.github.io/styles/main.css">
+
+<script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+<script src="https://cdn.bootcss.com/moment.js/2.23.0/moment.min.js"></script>
+
+
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://jaczuo.github.io">
+  <img class="avatar" src="https://jaczuo.github.io/images/avatar.png?v=1556012078701" alt="">
+  </a>
+  <h1 class="site-title">
+    jaczuo
+  </h1>
+  <p class="site-description">
+    温故而知新
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+      
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              TiDB集群部署
+            </h2>
+            <div class="post-info">
+              <time class="post-time">
+                · 2019-04-23 ·
+              </time>
+              
+                <a href="https://jaczuo.github.io/tag/7BvpPMa1W" class="post-tags">
+                  # TiDB
+                </a>
+              
+            </div>
+            
+              <div class="post-feature-image" style="background-image: url('https://download.pingcap.com/images/index-cn-tidbLogo.png')">
+              </div>
+            
+            <div class="post-content">
+              <p><strong>内容来自TiDB的培训，这里记录下整个部署的流程方便查找</strong></p>
+<h3 id="要求">要求：</h3>
+<ol>
+<li>拓扑：TiDB &amp; PD * 3 + TiKV * 5</li>
+<li>部署目录： /data/deploy_${cluster_name}</li>
+<li>创建数据库 database : tudb</li>
+<li>创建 table : tudb.tudb_1(id int,name varchar(20),age int) ;</li>
+<li>创建 用户 tuser 并赋予用户允许查看 tudb.tudb_1 的权限。</li>
+</ol>
+<h3 id="部署操作">部署操作：</h3>
+<h4 id="提前准备环境选择其中一台作为中控机下面的操作均为中控机操作注意用户">提前准备环境，选择其中一台作为中控机，下面的操作均为中控机操作，注意用户</h4>
+<h4 id="root-用户操作">root 用户操作</h4>
+<ol>
+<li>安装依赖包</li>
+</ol>
+<pre><code># yum -y install epel-release git curl sshpass
+# yum -y install python-pip
+</code></pre>
+<ol>
+<li>创建 tidb 用户，修改密码，赋予 sudo 权限</li>
+</ol>
+<pre><code># useradd -m -d /home/tidb tidb
+# passwd tidb
+# visudo
+tidb ALL=(ALL) NOPASSWD: ALL
+# su - tidb
+</code></pre>
+<h4 id="tidb-用户">tidb 用户</h4>
+<ol>
+<li>tidb 用户创建 ssh key</li>
+</ol>
+<ul>
+<li>交互直接 enter</li>
+</ul>
+<pre><code>$ ssh-keygen -t rsa  
+</code></pre>
+<ol start="2">
+<li>tidb 用户下载 tidb-ansible</li>
+</ol>
+<ul>
+<li>下载 v2.0.11 分支</li>
+</ul>
+<pre><code>git clone -b v2.0.11 https://github.com/pingcap/tidb-ansible.git
+</code></pre>
+<ol>
+<li>中控机安装 ansible 及其依赖</li>
+</ol>
+<ul>
+<li>注意依然是 tidb 用户</li>
+</ul>
+<pre><code>  $ cd /home/tidb/tidb-ansible
+  $ sudo pip install -r ./requirements.txt
+  $ ansible --version
+    ansible 2.5.0
+</code></pre>
+<ol start="4">
+<li>中控机上配置部署机器的 ssh 互信以及 sudo 规则</li>
+</ol>
+<ul>
+<li>注意将集群的 8 台机器包括中控机节点的 IP 都放在 servers 主机组下面</li>
+<li>ntp_server 如果是内网企业，使用企业内部的 ntp_server 服务器域名</li>
+</ul>
+<pre><code>$ cd /home/tidb/tidb-ansible
+$ vi hosts.ini
+[servers]
+172.16.10.1
+172.16.10.2
+172.16.10.3
+172.16.10.4
+172.16.10.5
+172.16.10.6
+
+[all:vars]
+username = tidb
+ntp_server = pool.ntp.org
+</code></pre>
+<ul>
+<li>需要交互 root 口令</li>
+</ul>
+<pre><code>$ ansible-playbook -i hosts.ini create_users.yml -u root -k
+</code></pre>
+<ol start="5">
+<li>部署集群机器安装 NTP 服务</li>
+</ol>
+<ul>
+<li>检测 NTP 服务是否正常</li>
+<li>可以通过链接中提供的方法完成验证https://pingcap.com/docs-cn/op-guide/ansible-deployment/#%E5%A6%82%E4%BD%95%E6%A3%80%E6%B5%8B-ntp-%E6%9C%8D%E5%8A%A1%E6%98%AF%E5%90%A6%E6%AD%A3%E5%B8%B8</li>
+</ul>
+<pre><code>$ cd /home/tidb/tidb-ansible
+$ ansible -i hosts.ini servers -m shell -a &quot;sudo systemctl status ntpd.service&quot;
+$ ansible -i hosts.ini servers -m shell -a &quot;ntpstat&quot;
+</code></pre>
+<ul>
+<li>通过 tidb-ansible 完成安装操作 ntp 的部署操作</li>
+</ul>
+<pre><code>$ cd /home/tidb/tidb-ansible
+$ ansible-playbook -i hosts.ini deploy_ntp.yml -u tidb -b
+</code></pre>
+<ol start="6">
+<li>物理机需要配置 CPUfreq 调节器模式，云主机忽略</li>
+<li>deploy_dir 建议采用 ext4 格式，云主机默认 xfs ，也支持</li>
+<li>分配机器资源，配置 inventory.ini</li>
+</ol>
+<ul>
+<li>分配集群的拓扑 tidb &amp;  pd 混部 * 3  +  tikv 单实例 * 3</li>
+<li>注意 inventory.ini 的必填项</li>
+<li>还有一些个性化的变量 https://pingcap.com/docs-cn/op-guide/ansible-deployment/</li>
+</ul>
+<pre><code>cat inventory.ini
+## TiDB Cluster Part
+[tidb_servers]
+*** tidb-ip
+
+[tikv_servers]
+*** tikv-ip
+
+[pd_servers]
+*** pd-ip
+
+[spark_master]
+
+[spark_slaves]
+
+## Monitoring Part
+# prometheus and pushgateway servers
+[monitoring_servers]
+*** 监控server-ip
+
+[grafana_servers]
+*** grafana-server ip
+
+# node_exporter and blackbox_exporter servers
+[monitored_servers]
+*** 被监控节点 ip
+
+[alertmanager_servers]
+*** alert-server-ip
+
+[kafka_exporter_servers]
+
+## Binlog Part
+[pump_servers:children]
+tidb_servers
+
+[drainer_servers]
+
+## Group variables
+[pd_servers:vars]
+# location_labels = [&quot;zone&quot;,&quot;rack&quot;,&quot;host&quot;]
+
+## Global variables
+[all:vars]
+deploy_dir = *** 修改成 /data/deploy_${cluster_name}
+
+## Connection
+# ssh via normal user
+ansible_user = *** tidb
+
+cluster_name = *** test-cluster
+
+tidb_version = v2.0.11
+
+# process supervision, [systemd, supervise]
+process_supervision = systemd
+
+timezone = Asia/Shanghai
+
+enable_firewalld = False
+# check NTP service
+enable_ntpd = True
+set_hostname = False
+
+## binlog trigger
+enable_binlog = False
+# zookeeper address of kafka cluster for binlog, example:
+# zookeeper_addrs = &quot;192.168.0.11:2181,192.168.0.12:2181,192.168.0.13:2181&quot;
+zookeeper_addrs = &quot;&quot;
+# kafka cluster address for monitoring, example:
+# kafka_addrs = &quot;192.168.0.11:9092,192.168.0.12:9092,192.168.0.13:9092&quot;
+kafka_addrs = &quot;&quot;
+
+# store slow query log into seperate file
+enable_slow_query_log = False
+
+# enable TLS authentication in the TiDB cluster
+enable_tls = False
+
+# KV mode
+deploy_without_tidb = False
+
+# Optional: Set if you already have a alertmanager server.
+# Format: alertmanager_host:alertmanager_port
+alertmanager_target = &quot;&quot;
+
+grafana_admin_user = &quot;admin&quot;
+grafana_admin_password = &quot;admin&quot;
+
+
+### Collect diagnosis
+collect_log_recent_hours = 2
+
+enable_bandwidth_limit = True
+# default: 10Mb/s, unit: Kbit/s
+collect_bandwidth_limit = 10000
+[tidb@xiaohou-vm1 tidb-ansible]$
+</code></pre>
+<ol start="9">
+<li>部署任务</li>
+</ol>
+<ul>
+<li>验证互信</li>
+</ul>
+<pre><code>ansible -i inventory.ini all -m shell -a 'whoami'
+ansible -i inventory.ini all -m shell -a 'whoami' -b
+</code></pre>
+<ul>
+<li>中控机下载 tidb binary</li>
+</ul>
+<pre><code>ansible-playbook local_prepare.yml
+</code></pre>
+<ul>
+<li>修改内核参数</li>
+</ul>
+<pre><code>ansible-playbook bootstrap.yml
+</code></pre>
+<ul>
+<li>部署集群</li>
+</ul>
+<pre><code>ansible-playbook deploy.yml
+</code></pre>
+<ul>
+<li>启动集群</li>
+</ul>
+<pre><code>ansible-playbook start.yml
+</code></pre>
+<ol>
+<li>测试集群</li>
+</ol>
+<ul>
+<li>登陆验证</li>
+</ul>
+<pre><code>mysql -u root -h 172.16.10.1 -P 4000
+</code></pre>
+<ul>
+<li>grafana 登陆验证 grafana-server-ip:3000 admin/admin</li>
+</ul>
+
+            </div>
+          </article>
+        </div>
+    
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://jaczuo.github.io/post/rust-xue-xi-bi-ji-1">
+              <h3 class="post-title">
+                Rust学习笔记-1
+              </h3>
+            </a>
+          </div>  
+        
+
+        
+    
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+</div>
+
+<script>
+  hljs.initHighlightingOnLoad()
+</script>
+
+      </div>
+    </div>
+  </body>
+</html>
