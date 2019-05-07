@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>celery中的时区陷阱 | jaczuo</title>
+<meta name="description" content="温故而知新">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://jaczuo.github.io/favicon.ico?v=1557221020872">
+<link rel="stylesheet" href="https://jaczuo.github.io/styles/main.css">
+
+
+
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+<script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+
+
+
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://jaczuo.github.io">
+        <img src="https://jaczuo.github.io/images/avatar.png?v=1557221020872" class="site-logo">
+        <h1 class="site-title">jaczuo</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">celery中的时区陷阱</h2>
+            <div class="post-date">2019-05-07</div>
+            
+              <div class="feature-container" style="background-image: url('http://docs.celeryproject.org/en/latest/_static/celery_512.png')">
+              </div>
+            
+            <div class="post-content">
+              <p>Django中使用<code>celery</code>执行异步任务非常方便，通过<code>apply_async</code>可以控制定时任务的执行时间。一般使用场景中，比较多的是任务在一定时间之后执行，这时只要指定<code>countdown</code>参数就可以了，<code>eta</code>参数能够指定任务执行的绝对时间，由于在项目中使用很少，因此一些特性之前没注意到。</p>
+<h2 id="eta默认为utc时间">eta默认为UTC时间</h2>
+<p>假设在<code>ceelry</code> 4.x 版本中定义如下任务</p>
+<p>@app.task(queue='celery')
+def hello():
+print '==========='
+print 'hello world'
+print '==========='</p>
+<p>调用<code>hello.apply_async(eta=datetime.datetime.now())</code>时任务不会立即执行，实际情况是过8小时之后才会执行。查了<code>celery</code>源码，发现<code>eta</code>参数在消费者也就是web server发消息时基本会直接设置在<code>amqp</code>消息中，默认为UTC时间。</p>
+<p>if countdown:  # convert countdown to ETA
+self._verify_seconds(countdown, 'countdown')
+now = now or self.app.now()
+eta = now + timedelta(seconds=countdown)
+if isinstance(expires, numbers.Real):
+self._verify_seconds(expires, 'expires')
+now = now or self.app.now()
+expires = now + timedelta(seconds=expires)
+eta = eta and eta.isoformat()</p>
+<p>当worker收到消息后，会根据本地的时区信息将UTC转换为本地时间进行执行
+其中<code>to_system_tz</code>就是转换为系统也即本地时间</p>
+<p>if req.utc:
+eta = to_timestamp(to_system_tz(req.eta))
+else:
+eta = to_timestamp(req.eta, app.timezone)</p>
+<h2 id="countdown-为什么没问题">countdown 为什么没问题</h2>
+<p>由上面代码可以看出，<code>countdown</code>也会转换为eta存储在消息中，而<code>countdown</code>之所以没问题，是因为基本时间即now为UTC时间。</p>
+<h2 id="celery时区相关配置">celery时区相关配置</h2>
+<p><code>celery</code>中和时区相关的配置主要有[两个]</p>
+<ul>
+<li><strong>CELERY_ENABLE_UTC</strong> 开启后消息的时间将会按照UTC时区转化，默认开启</li>
+<li>** CELERY_TIMEZONE** 默认为UTC，可以是任何[pytz]支持的时区</li>
+</ul>
+<p>设置本地时区并不能解决上面的问题，因为eta就没有进行过时区转换，完全是按照用户传进来的时间进行计算</p>
+<h2 id="解决方法">解决方法</h2>
+<p>可以采用下面的代码进行解决，时区为<code>'Asia/Shanghai</code></p>
+<p>import datetime
+from django.utils.timezone import get_current_timezone</p>
+<p>n = datetime.datetime.now()
+tz = get_current_timezone()
+n = tz.localize(n)
+hello.apply_async(eta=n)</p>
+<p>需要注意的是通过<code>n.replace(tzinfo=tz)</code>进行替换的话，总是会和期望的时间相差6分钟，而这又是另外一个问题。<code>pytz</code>中上海时间比北京时间提前了6分钟。。。</p>
+
+            </div>
+            
+              <div class="tag-container">
+                
+                  <a href="https://jaczuo.github.io/tag/eUgQUuaFi" class="tag">
+                    celery
+                  </a>
+                
+              </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://jaczuo.github.io/post/tidb-ji-qun-bu-shu">
+                  <h3 class="post-title">
+                    TiDB集群部署
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+
+<script type="application/javascript">
+
+AOS.init();
+
+hljs.initHighlightingOnLoad()
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+  </body>
+</html>
