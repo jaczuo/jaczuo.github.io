@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>TiDB数据迁移工具Syncer的使用 | jaczuo</title>
+<meta name="description" content="温故而知新">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://jaczuo.github.io/favicon.ico?v=1557283794451">
+<link rel="stylesheet" href="https://jaczuo.github.io/styles/main.css">
+
+
+
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+<script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+
+
+
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://jaczuo.github.io">
+        <img src="https://jaczuo.github.io/images/avatar.png?v=1557283794451" class="site-logo">
+        <h1 class="site-title">jaczuo</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">TiDB数据迁移工具Syncer的使用</h2>
+            <div class="post-date">2019-05-08</div>
+            
+            <div class="post-content">
+              <p>在将数据迁移到 TiDB 过程中，通过使用 mydumper 和 loader 可以实现存量数据的整体迁移，之后的增量数据可以借助官方提供工具 <a href="https://www.pingcap.com/docs-cn/tools/syncer/">syncer</a>。其基本原理就是将 syncer 作为待同步数据的 MySQL 服务器的一个 slave，通过读取 binlog 实现和 master 的同步。</p>
+<p>因为我们迁移的情况和官方文档示例的情况不太相同，因此也遇到一些坑，在此总结一下。</p>
+<h2 id="指定待同步的binlog">指定待同步的binlog</h2>
+<p>syncer 同步时需要一个用于指定 binlog pos 的 meta 文件，binlog 相关的信息可以从 loader 导出的文件 <code>metadata</code> 中看到</p>
+<pre><code>binlog-name = &quot;mysql-bin.000700&quot;
+binlog-pos = 281874470
+binlog-gtid = &quot;&quot;
+</code></pre>
+<p><code>metadata</code> 文件内容一般是如下形式</p>
+<pre><code>Started dump at: 2018-12-24 17:26:37
+SHOW MASTER STATUS:
+        Log: mysql-bin.000700
+        Pos: 281874470
+        GTID:
+
+SHOW SLAVE STATUS:
+        Host: 10.x.1x.2xx
+        Log: mysql-bin.007363
+        Pos: 971282247
+        GTID:
+
+Finished dump at: 2018-12-24 18:49:05
+</code></pre>
+<p>我们在同步过程中是将 syncer 连接了从库 db05 上，使用的是 master 的 binlog mysql-bin.000700，使用 slave 的 binlog 将无法正常同步。</p>
+<h2 id="数据库重命名">数据库重命名</h2>
+<p>另外由于我们要同步的数据库发生了重命名，比如源数据库是 <code>online_1</code>，现在在 TiDB 上重命名为 <code>online_2</code>，这种情况在官方文档没有配置说明，正确的配置应该是下面这样，才能将 <code>online_1</code> 上的表同步到 <code>ask_1</code>。注意 <code>replicate-do-table</code> 配置下面需要制定的是目的方数据库，配置为源数据库不能同步数据。另外路由表本是由于合并分库分表数据，这里用来迁移不同数据库甚至不同表名的数据。</p>
+<pre><code>[[replicate-do-table]]
+db-name =&quot;online_2&quot;
+tbl-name = &quot;ask_1&quot;
+
+[[route-rules]]
+pattern-schema = &quot;online_1&quot;
+pattern-table = &quot;ask_1&quot;
+target-schema = &quot;online_2&quot;
+target-table = &quot;ask_1&quot;
+</code></pre>
+<p>同步完成之后就可以在monitor查看同步情况了
+<img src="https://upload-images.jianshu.io/upload_images/13138878-41eb383fcc372272.jpg?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240" alt="sync监控"></p>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://jaczuo.github.io/post/celery-timezone">
+                  <h3 class="post-title">
+                    celery中的时区陷阱
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+
+<script type="application/javascript">
+
+AOS.init();
+
+hljs.initHighlightingOnLoad()
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+  </body>
+</html>
