@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" >
 
-<title>TiDB数据迁移工具Syncer的使用 | jaczuo</title>
+<title>TiDB 2.0 Ansible check model 部署问题 | jaczuo</title>
 <meta name="description" content="温故而知新">
 
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -91,48 +91,46 @@
       <div class="main-container">
         <div class="content-container" data-aos="fade-up">
           <div class="post-detail">
-            <h2 class="post-title">TiDB数据迁移工具Syncer的使用</h2>
-            <div class="post-date">2019-05-08</div>
+            <h2 class="post-title">TiDB 2.0 Ansible check model 部署问题</h2>
+            <div class="post-date">2019-05-09</div>
             
             <div class="post-content">
-              <p>在将数据迁移到 TiDB 过程中，通过使用 mydumper 和 loader 可以实现存量数据的整体迁移，之后的增量数据可以借助官方提供工具 <a href="https://www.pingcap.com/docs-cn/tools/syncer/">syncer</a>。其基本原理就是将 syncer 作为待同步数据的 MySQL 服务器的一个 slave，通过读取 binlog 实现和 master 的同步。</p>
-<p>因为我们迁移的情况和官方文档示例的情况不太相同，因此也遇到一些坑，在此总结一下。</p>
-<h2 id="指定待同步的binlog">指定待同步的binlog</h2>
-<p>syncer 同步时需要一个用于指定 binlog pos 的 meta 文件，binlog 相关的信息可以从 loader 导出的文件 <code>metadata</code> 中看到</p>
-<pre><code>binlog-name = &quot;mysql-bin.000700&quot;
-binlog-pos = 281874470
-binlog-gtid = &quot;&quot;
+              <h2 id="现象">现象</h2>
+<p>部署TiDB之前，希望先通过添加<code>--check</code>参数来检查环境是否满足部署条件，比如在滚动升级TiDB之前，通过如下命令做部署前检查</p>
+<pre><code>ansible-playbook rolling_update.yml --tags=tidb --check
 </code></pre>
-<p><code>metadata</code> 文件内容一般是如下形式</p>
-<pre><code>Started dump at: 2018-12-24 17:26:37
-SHOW MASTER STATUS:
-        Log: mysql-bin.000700
-        Pos: 281874470
-        GTID:
+<p>但是当运行至<code>NTP</code>服务检查时，报错了。</p>
+<blockquote>
+<p>Ansible FAILED! =&gt; playbook: rolling_update.yml; TASK: check_config_dynamic : Preflight check - NTP service; message: {&quot;msg&quot;: &quot;The conditional check 'ntp_st.stdout|int != 1' failed. The error was: error while evaluating conditional (ntp_st.stdout|int != 1): 'dict object' has no attribute 'stdout'\n\nThe error appears to have been in '/tidb-ansible/roles/check_config_dynamic/tasks/main.yml': line 19, column 3, but may\nbe elsewhere in the file depending on the exact syntax problem.\n\nThe offending line appears to be:\n\n\n- name: Preflight check - NTP service\n  ^ here\n&quot;}_</p>
+</blockquote>
+<p>这里实际是通过SSH在目的主机运行shell命令并根据输出结果来判断是否通过的，但上面错误信息可以看出shell命令没有得到执行。</p>
+<h2 id="分析">分析</h2>
+<p>需要搞清楚<code>ntp_st</code>的输出到底是什么，ansible中可以通过如下方式添加调试信息。</p>
+<pre><code>tidb-ansible/roles/check_config_dynamic/tasks/main.yml
 
-SHOW SLAVE STATUS:
-        Host: 10.x.1x.2xx
-        Log: mysql-bin.007363
-        Pos: 971282247
-        GTID:
-
-Finished dump at: 2018-12-24 18:49:05
+- name: Preflight check - Set NTP service status
+  shell: ntpstat | grep -w synchronised | wc -l
+  register: ntp_st
+  changed_when: false
+  when: enable_ntpd
+- debug: msg=&quot; value is  {{ ntp_st }} &quot;
 </code></pre>
-<p>我们在同步过程中是将 syncer 连接了从库 db05 上，使用的是 master 的 binlog mysql-bin.000700，使用 slave 的 binlog 将无法正常同步。</p>
-<h2 id="数据库重命名">数据库重命名</h2>
-<p>另外由于我们要同步的数据库发生了重命名，比如源数据库是 <code>online_1</code>，现在在 TiDB 上重命名为 <code>online_2</code>，这种情况在官方文档没有配置说明，正确的配置应该是下面这样，才能将 <code>online_1</code> 上的表同步到 <code>ask_1</code>。注意 <code>replicate-do-table</code> 配置下面需要制定的是目的方数据库，配置为源数据库不能同步数据。另外路由表本是由于合并分库分表数据，这里用来迁移不同数据库甚至不同表名的数据。</p>
-<pre><code>[[replicate-do-table]]
-db-name =&quot;online_2&quot;
-tbl-name = &quot;ask_1&quot;
-
-[[route-rules]]
-pattern-schema = &quot;online_1&quot;
-pattern-table = &quot;ask_1&quot;
-target-schema = &quot;online_2&quot;
-target-table = &quot;ask_1&quot;
+<p>输出结果为</p>
+<pre><code>ok: [10.x.x.x] =&gt; {
+    &quot;msg&quot;: &quot; value is  {u'msg': u'remote module (command) does not support check mode', 'failed': False, u'skipped': True, 'changed': False} &quot;
+}
 </code></pre>
-<p>同步完成之后就可以在monitor查看同步情况了
-<img src="https://upload-images.jianshu.io/upload_images/13138878-41eb383fcc372272.jpg?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240" alt="sync监控"></p>
+<p>可以看出在check mode下，远程命令并不能执行。。</p>
+<h2 id="解决">解决</h2>
+<p>ansible 2.2之后可以通过修改配置的方式来强制check mode执行shell命令</p>
+<pre><code>- name: Preflight check - Set NTP service status
+  shell: ntpstat | grep -w synchronised | wc -l
+  register: ntp_st
+  changed_when: false
+  when: enable_ntpd
+  check_mode: no
+</code></pre>
+<p>添加<code>check_mode: no</code>之后，就可以顺利继续执行了。</p>
 
             </div>
             
@@ -147,9 +145,9 @@ target-table = &quot;ask_1&quot;
             
               <div class="next-post">
                 <div class="next">下一篇</div>
-                <a href="https://jaczuo.github.io/post/celery-timezone">
+                <a href="https://jaczuo.github.io/post/tidb-shu-ju-qian-yi-gong-ju-syncer-de-shi-yong">
                   <h3 class="post-title">
-                    celery中的时区陷阱
+                    TiDB数据迁移工具Syncer的使用
                   </h3>
                 </a>
               </div>
